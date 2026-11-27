@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Korektor — lokální oprava textu</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel2: #273449;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --accent2: #22d3ee;
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --border: #334155;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: radial-gradient(1200px 600px at 20% -10%, #1e3a5f 0%, var(--bg) 60%);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 24px; }
+  header {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+  h1 { margin: 0; font-size: 26px; letter-spacing: -0.5px; }
+  h1 span { color: var(--accent); }
+  .status {
+    display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted);
+    background: var(--panel); padding: 8px 12px; border-radius: 999px; border: 1px solid var(--border);
+  }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--err); }
+  .dot.ok { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .dot.busy { background: var(--warn); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px; display: flex; flex-direction: column; gap: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,.25);
+  }
+  .card h2 { margin: 0 0 4px; font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+
+  textarea {
+    width: 100%; min-height: 260px; resize: vertical;
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px; font-size: 15px; line-height: 1.5; font-family: inherit;
+  }
+  textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(56,189,248,.15); }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #0b1220; border: none; padding: 9px 16px; border-radius: 9px;
+    font-weight: 600; cursor: pointer; font-size: 14px; transition: transform .1s, opacity .2s;
+  }
+  button:hover { transform: translateY(-1px); }
+  button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+  button.secondary {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+  }
+  button.secondary:hover { border-color: var(--accent); }
+  select, input[type="checkbox"] { accent-color: var(--accent); }
+  select {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    padding: 8px 10px; border-radius: 9px; font-size: 14px;
+  }
+  label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+
+  .out {
+    background: var(--panel2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px; min-height: 260px; font-size: 15px; line-height: 1.5; white-space: pre-wrap;
+  }
+  .out.empty { color: var(--muted); font-style: italic; }
+
+  .changes { margin-top: 8px; }
+  .change {
+    background: #0b1220; border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; margin-bottom: 6px; font-size: 13px;
+  }
+  .change .orig { color: var(--err); text-decoration: line-through; }
+  .change .corr { color: var(--ok); font-weight: 600; }
+  .change .reason { color: var(--muted); margin-top: 2px; }
+
+  .notes { margin-top: 8px; font-size: 13px; color: var(--muted); font-style: italic; }
+
+  .footer { margin-top: 16px; font-size: 12px; color: var(--muted); text-align: center; }
+  .footer a { color: var(--accent); }
+  .stats { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>AI <span>Korektor</span> — lokální oprava textu</h1>
+    <div class="status">
+      <span id="dot" class="dot"></span>
+      <span id="statusText">Kontroluji Ollama…</span>
+    </div>
+  </header>
+
+  <div class="controls" style="margin-bottom:14px;">
+    <label>Jazyk:
+      <select id="lang">
+        <option value="cs">Čeština</option>
+        <option value="en">English</option>
+        <option value="sk">Slovenčina</option>
+      </select>
+    </label>
+    <label>Model:
+      <select id="model"><option value="qwen2.5:7b">qwen2.5:7b</option></select>
+    </label>
+    <label>Tón:
+      <select id="tone">
+        <option value="neutral">Neutrální</option>
+        <option value="formal">Formální</option>
+        <option value="informal">Neformální</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="auto" checked> Automatická kontrola při psaní</label>
+    <label><input type="checkbox" id="cpu" checked> Vynutit CPU (num_gpu=0)</label>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Váš text</h2>
+      <textarea id="input" placeholder="Sem napište text, který chcete zkontrolovat…"></textarea>
+      <div class="toolbar">
+        <button id="fixBtn">Opravit text</button>
+        <button id="clearBtn" class="secondary">Vymazat</button>
+        <span class="stats" id="stats">0 znaků</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Opravený text</h2>
+      <div id="output" class="out empty">Zde se zobrazí opravený text.</div>
+      <div class="toolbar">
+        <button id="copyBtn" class="secondary">Kopírovat opravené</button>
+        <button id="applyBtn" class="secondary">Použít opravené do vstupu</button>
+      </div>
+      <div id="changes" class="changes"></div>
+      <div id="notes" class="notes"></div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Běží plně lokálně přes <a href="https://ollama.com" target="_blank">Ollama</a>. Žádná data neopouští váš počítač.
+    Alternativy: LanguageTool, Grammarly, DeepL Write, LibreOffice (nástroje → jazyk → kontrola pravopisu).
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const input = $('input'), output = $('output'), dot = $('dot'), statusText = $('statusText');
+const fixBtn = $('fixBtn'), clearBtn = $('clearBtn'), copyBtn = $('copyBtn'), applyBtn = $('applyBtn');
+
+let busy = false;
+let debounceTimer = null;
+let lastText = '';
+
+function setStatus(text, kind) {
+  statusText.textContent = text;
+  dot.className = 'dot' + (kind ? ' ' + kind : '');
+}
+
+async function checkOllama() {
+  try {
+    const r = await fetch('/api/tags');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    const models = (data.models || []).map(m => m.name);
+    const sel = $('model');
+    const prev = sel.value;
+    sel.innerHTML = '';
+    for (const m of models) {
+      const o = document.createElement('option');
+      o.value = m; o.textContent = m;
+      sel.appendChild(o);
+    }
+    if (models.includes(prev)) sel.value = prev;
+    else if (models.length) sel.value = models[0];
+    // prefer qwen2.5
+    const pref = models.find(m => m.startsWith('qwen2.5'));
+    if (pref && !prev) sel.value = pref;
+    setStatus('Ollama připojeno (' + models.length + ' modelů)', 'ok');
+    return true;
+  } catch (e) {
+    setStatus('Ollama není dostupná — spusťte "ollama serve"', '');
+    return false;
+  }
+}
+
+function buildPrompt(text, lang, tone) {
+  const langName = { cs: 'češtinu', en: 'English', sk: 'slovenčinu' }[lang] || 'češtinu';
+  const toneHint = { neutral: 'neutrální', formal: 'formální', informal: 'neformální' }[tone];
+  return `Jsi profesionální korektor textu v ${langName}. Oprav pravopis, gramatiku, interpunkci a typografii. Zachovej význam a styl; pokud je text v pořádku, vrať ho beze změny. Tón: ${toneHint}.
+
+Vrať POUZE validní JSON (žádný markdown, žádné komentáře) v tomto tvaru:
+{"corrected":"<opravený text>","changes":[{"original":"<původní úsek>","corrected":"<opravený úsek>","reason":"<stručný důvod v ${langName}>"}],"notes":"<krátká poznámka nebo prázdný řetězec>"}
+
+Text ke kontrole:
+"""${text}"""`;
+}
+
+async function fixText() {
+  const text = input.value.trim();
+  if (!text) { setStatus('Zadejte text k opravě.', ''); return; }
+  if (busy) return;
+  busy = true;
+  fixBtn.disabled = true;
+  setStatus('Opravuji…', 'busy');
+  const model = $('model').value;
+  const lang = $('lang').value;
+  const tone = $('tone').value;
+  const cpu = $('cpu').checked;
+  const body = {
+    model,
+    prompt: buildPrompt(text, lang, tone),
+    stream: false,
+    options: { temperature: 0.2, num_gpu: cpu ? 0 : undefined }
+  };
+  // remove undefined
+  if (!cpu) delete body.options.num_gpu;
+  try {
+    const r = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    let raw = (data.response || '').trim();
+    // strip code fences if present
+    raw = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    let parsed = null;
+    try { parsed = JSON.parse(raw); } catch (e) {
+      // try extract json object
+      const m = raw.match(/\{[\s\S]*\}/);
+      if (m) { try { parsed = JSON.parse(m[0]); } catch {} }
+    }
+    if (!parsed || typeof parsed.corrected !== 'string') {
+      // fallback: treat whole response as corrected
+      output.textContent = raw;
+      output.classList.remove('empty');
+      $('changes').innerHTML = '';
+      $('notes').textContent = 'Model nevrátil platný JSON; zobrazen surový výstup.';
+      setStatus('Hotovo (surový výstup)', 'ok');
+      return;
+    }
+    output.textContent = parsed.corrected;
+    output.classList.remove('empty');
+    lastText = parsed.corrected;
+    // changes
+    const ch = $('changes');
+    ch.innerHTML = '';
+    if (Array.isArray(parsed.changes) && parsed.changes.length) {
+      const h = document.createElement('div');
+      h.style.cssText = 'font-size:13px;color:#94a3b8;margin:6px 0 4px;';
+      h.textContent = 'Změny (' + parsed.changes.length + '):';
+      ch.appendChild(h);
+      for (const c of parsed.changes) {
+        const div = document.createElement('div');
+        div.className = 'change';
+        div.innerHTML = `<div><span class="orig">${escapeHtml(c.original||'')}</span> → <span class="corr">${escapeHtml(c.corrected||'')}</span></div><div class="reason">${escapeHtml(c.reason||'')}</div>`;
+        ch.appendChild(div);
+      }
+    }
+    $('notes').textContent = parsed.notes || '';
+    setStatus('Hotovo', 'ok');
+  } catch (e) {
+    setStatus('Chyba: ' + e.message, '');
+    output.textContent = 'Chyba při komunikaci s Ollamou.';
+    output.classList.remove('empty');
+  } finally {
+    busy = false;
+    fixBtn.disabled = false;
+  }
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+input.addEventListener('input', () => {
+  const t = input.value;
+  $('stats').textContent = t.length + ' znaků';
+  if ($('auto').checked) {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      if (input.value.trim() && input.value.trim() !== lastText) fixText();
+    }, 1800);
+  }
+});
+
+fixBtn.addEventListener('click', fixText);
+clearBtn.addEventListener('click', () => {
+  input.value = ''; output.textContent = 'Zde se zobrazí opravený text.'; output.classList.add('empty');
+  $('changes').innerHTML = ''; $('notes').textContent = ''; lastText = '';
+  $('stats').textContent = '0 znaků';
+});
+copyBtn.addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(output.textContent); setStatus('Zkopírováno', 'ok'); }
+  catch { setStatus('Kopírování selhalo', ''); }
+});
+applyBtn.addEventListener('click', () => {
+  input.value = output.textContent; lastText = output.textContent;
+  $('stats').textContent = input.value.length + ' znaků';
+});
+
+checkOllama();
+setInterval(checkOllama, 15000);
+</script>
+</body>
+</html>
